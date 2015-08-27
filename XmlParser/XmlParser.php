@@ -20,15 +20,16 @@ class XmlParser {
 
     /**
      * @param $data
+     * @param $languages
      * @return string
      *
-     * Takes array filled with exercise data and returns formatted XML
+     * Takes array filled with exercise data and an array filled with language ids and returns formatted XML
      */
-    public function parse($data) {
+    public function parse($data, $languages) {
         # Initialize progress bar
         $size=sizeof($data);
         echo '<div style="width: 300px; text-align: center;">';
-        echo '<div id="conversionStatus">Conversion in progress. Please wait.</div>';
+        echo '<div id="conversionStatus">Conversion in progress. Please wait, this might take a while.</div>';
         $this->progressBar->render();
         echo '</div>';
 
@@ -43,7 +44,7 @@ class XmlParser {
             $setsSub->addAttribute('id', $i);
             if($exercise['mode'] != 'List' && $exercise['mode'] != 'Short Phrase' && $exercise['mode'] != 'Clickable Image' && $exercise['mode'] != 'Multipart Formula')
                 //^those modes are not needed. The only questions that use them are sample questions
-                $preparedData = $this->preparer->prepare($exercise);
+                $preparedData = $this->preparer->prepare($exercise, $languages);
             if(!isset($preparedData['mode']) || $preparedData['mode'] != 'Multipart') {
                 $xmlItem = $setsSub->addChild('item');
                 $this->_toXml($preparedData, $xmlItem);

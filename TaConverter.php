@@ -20,16 +20,17 @@ class TaConverter
 
     /**
      * @param array $file
+     * @param array $languages
      * @return string
      *
-     * Takes a file array (quBank) and returns an XML string
+     * Takes a file array (quBank) and an array of language ids and returns an XML string
      */
-    public function convert(Array $file) {
+    public function convert(Array $file, Array $languages) {
         $data = $this->_collectData($file);
         if(sizeof($data) > 105) {
             return array('error' => 'Exceeded maximum number of exercises to convert at once (100).', 'splits' => $this->splitQu($file));
         }
-        $data = $this->xmlParser->parse($data);
+        $data = $this->xmlParser->parse($data, $languages);
         return $data;
     }
 
@@ -128,7 +129,6 @@ class TaConverter
                     if($exerciseCount % 100 == 0) {
                         $splitPositions[] = $lineCount-1;
                     }
-
                     $increase = TRUE;
                 }
             }

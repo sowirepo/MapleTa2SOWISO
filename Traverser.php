@@ -11,16 +11,51 @@ require 'PhpParser/lib/bootstrap.php';
  * Used for conversion from MapleTA functions to SOWISO functions
  */
 class Traverser extends NodeVisitorAbstract {
-    # Sum contains constants, needs to be changed on entering to avoid fetching constants
+    private $prettyPrinter;
+    private $functionCall;
+    private $binaryOp;
+
+    public function __construct() {
+        $this->prettyPrinter = new PrettyPrinter\Standard();
+    }
+
+    private function checkForConst($node, $return = FALSE) {
+        foreach($node as $sub) {
+            if(is_object($sub)) {
+                $name = get_class($sub);
+                if($name == 'PhpParser\Node\Expr\ConstFetch') {
+                    $return = TRUE;
+                    break;
+                }
+                elseif($name == 'PhpParser\Node\Expr\FuncCall') {
+                    $return = FALSE;
+                    break;
+                }
+                $return = $this->checkForConst($sub, $return);
+            }
+        }
+        return $return;
+    }
+
+    public function beforeTraverse(array $nodes) {
+        $this->functionCall = FALSE;
+        $this->binaryOp = FALSE;
+    }
+
     public function enterNode(Node $node) {
-        if($node instanceof Node\Expr\FuncCall && $node->name == 'sum') {
-            $prettyPrinter = new PrettyPrinter\Standard();
-            $args = explode(PHP_EOL, $prettyPrinter->prettyPrint($node->args));
-            unset($prettyPrinter);
-            $arg = new Node\Scalar\String_($node->name . '((' . str_replace('**', '^', $args[3]) . '),' . $args[0] . ', ' . $args[1] . ', '. $args[2] . ')');
-            return new Node\Expr\FuncCall(new Node\Name('sw_maxima_native'), array($arg));
+        if($node instanceof Node\Expr\FuncCall) {
+            $this->functionCall = TRUE;
+            if($node->name == 'sum') {
+                $args = explode(PHP_EOL, $this->prettyPrinter->prettyPrint($node->args));
+                $arg = new Node\Scalar\String_($node->name . '((' . str_replace('**', '^', $args[3]) . '),' . $args[0] . ', ' . $args[1] . ', '. $args[2] . ')');
+                return new Node\Expr\FuncCall(new Node\Name('sw_maxima_native'), array($arg));
+            }
+        } elseif($node instanceof Node\Expr\BinaryOp && $this->checkForConst($node)) {
+            $this->binaryOp = TRUE;
+            return new Node\Expr\FuncCall(new Node\Name('sw_maxima_native'), array(new Node\Scalar\String_($this->prettyPrinter->prettyPrintExpr($node))));
         }
     }
+
     public function leaveNode(Node $node) {
         if($node instanceof Node\Expr\FuncCall) {
             # Strips superfluous '$' before function name (which is tolerated by MapleTA)
@@ -94,12 +129,20 @@ class Traverser extends NodeVisitorAbstract {
                         $max = $node->args[0]->value;
                         $node->args = array();
                         $node->args[] = new Node\Arg(new Node\Scalar\LNumber(0));
-                        $node->args[] = new Node\Arg(new Node\Expr\BinaryOp\Minus($max, new Node\Scalar\LNumber(1)));
-                    } elseif(sizeof($node->args) == 2) {
-                        $node->args[1] = new Node\Arg(new Node\Expr\BinaryOp\Minus($node->args[1]->value, new Node\Scalar\LNumber(1)));
-                    } elseif(sizeof($node->args) == 3) {
-                        $node->name = new Node\Name('sw_rand_steps');
-                        $node->args[1] = new Node\Arg(new Node\Expr\BinaryOp\Minus($node->args[1]->value, new Node\Scalar\LNumber(1)));
+                        if($max instanceof Node\Scalar\LNumber) {
+                            $max->value--;
+                            $node->args[] = new Node\Arg($max);
+                        } else
+                            $node->args[] = new Node\Arg(new Node\Expr\BinaryOp\Minus($max, new Node\Scalar\LNumber(1)));
+                    } else {
+                        if(sizeof($node->args) == 3)
+                            $node->name = new Node\Name('sw_rand_steps');
+                        $max = $node->args[1]->value;
+                        if($max instanceof Node\Scalar\LNumber) {
+                            $max->value--;
+                            $node->args[1] = new Node\Arg($max);
+                        } else
+                            $node->args[1] = new Node\Arg(new Node\Expr\BinaryOp\Minus($max, new Node\Scalar\LNumber(1)));
                     }
                     break;
                 case 'rand':
@@ -165,14 +208,18 @@ class Traverser extends NodeVisitorAbstract {
                     break;
                 case 'ln':
                 case 'log':
-                    if($node->name == 'log') $node->args[] = new Node\Arg(new Node\Scalar\LNumber(10));
+                    if($node->name == 'log')
+                        $node->args[] = new Node\Arg(new Node\Scalar\LNumber(10));
                     $node->name = new Node\Name('log');
                     break;
             }
         } elseif($node instanceof Node\Expr\BinaryOp\Pow) {
             return new Node\Expr\FuncCall(new Node\Name('pow'), array($node->left,$node->right));
         } elseif($node instanceof Node\Expr\ConstFetch) {
-            throw new Error("Variable contains constant");
+            if(!$this->functionCall) {
+                return new Node\Expr\FuncCall(new Node\Name('sw_maxima_native'), array(new Node\Scalar\String_($node->name->toString())));
+            }  else
+                return new Node\Scalar\String_($node->name->toString());
         }
         return $node;
     }

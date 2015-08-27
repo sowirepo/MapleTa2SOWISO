@@ -2,6 +2,7 @@
 namespace TaConverter\XmlParser;
 require dirname(__FILE__).'/../PhpParser/lib/bootstrap.php';
 require dirname(__FILE__).'/../Traverser.php';
+require dirname(__FILE__).'/../MapleParser.php';
 
 /**
  * Class Preparer
@@ -10,6 +11,7 @@ require dirname(__FILE__).'/../Traverser.php';
  */
 class Preparer {
     private $data;
+    private $languages;
     private $exercise_id = 0;
     private $set_id = 0;
     private $mathMLEntities;
@@ -50,17 +52,21 @@ class Preparer {
         $this->prettyPrinter = new \PhpParser\PrettyPrinter\Standard;
         $this->traverser = new \PhpParser\NodeTraverser;
         $this->traverser->addVisitor(new \PhpParser\Traverser);
+
+        $this->mapleParser = new \MapleParser();
     }
 
     /**
      * @param $data
+     * @param $languages
      * @return array
      *
-     * Takes an array filled with exercise data and returns a properly structured array.
+     * Takes an array filled with exercise data and an array filled with language ids and returns a properly structured array.
      * Prepares and converts data for XmlParser one exercise at a time
      */
-    public function prepare($data) {
+    public function prepare($data, $languages) {
         $this->data = $data;
+        $this->languages = $languages;
 
         if($data['mode'] == 'Multipart') {
             return $this->_prepareMultiparts($data);
@@ -190,7 +196,7 @@ class Preparer {
      */
     private function _prepareExercise() {
         $exercise = array();
-        switch($this->data['mode']) { //todo: delete superfluous cases
+        switch($this->data['mode']) {
              case 'Matching':
                  $this->currentType = 3;
                  $terms = array();
@@ -388,8 +394,6 @@ class Preparer {
                     foreach($matches[1] as $mapleFunc) {
                         $mapleFunctions[] = $mapleFunc;
                         $replace = "maple($i)";
-                        //echo "Function: $mapleFunc<br/>Replace:$replace<br/><br/>";
-                        //$var = preg_replace($mapleFunc, $replace, 1);
                         $var = str_replace($mapleFunc, $replace, $var);
                         $i++;
                     }
@@ -446,9 +450,10 @@ class Preparer {
                 $this->exercise_comment .= PHP_EOL . 'Variable replacement scheme:' . PHP_EOL;
             foreach($vars as $name=>$def) {
                 $this->exercise_comment .= $name . ' => $' . $letters[$i] . PHP_EOL;
-                $replace[0][] = '/\\' . $name . '([^a-zA-Z0-9])/'; // for replacing var in text
-                $replace[1][] = '$'. $letters[$i++] . '$1'; // for replacement. insert captured group at the end
+                $replace[0][] = '/\\' . $name . '([^a-zA-Z0-9]|\b)/'; // for replacing var in text
+                $replace[1][] = '$'. $letters[$i] . '$1'; // for replacement. insert captured group at the end
                 $replace[2][] = '/\\' . $name . '\\Z/'; // for replacing vars in answer
+                $replace[3][] = '#$'. $letters[$i++] . '#$1'; // for replacement in exercise_text
             }
 
             list($replace[0], $replace[1], $replace[2]) = array(array_reverse($replace[0]),array_reverse($replace[1]),array_reverse($replace[2]));
@@ -462,23 +467,33 @@ class Preparer {
                     $comment = "Variable conversion failed. Original variable: $name=".$def['ta'];
                     $this->nonConvertibles[] = $letters[$i];
                 } elseif(strpos($def['sowiso'], 'maple(') !== FALSE) {
-                    // todo conversion
                     $def['sowiso'] = $this->_mapleVarConvert($def['sowiso']);
+                    $warning = $def['sowiso']['warning'];
+                    $def['sowiso'] = $def['sowiso']['definition'];
                     if(strpos($def['sowiso'], 'maple(') !== FALSE) {
                         $definition = 1;
                         $comment = 'This maple function could not be converted:' . PHP_EOL . $name . '=' . $def['ta'];
                         $this->nonConvertibles[] = $letters[$i];
                     } else {
                         $definition = $def['sowiso'];
-                        $comment = 'Original variable:' . PHP_EOL . $name . '=' . $def['ta'];
+                        $comment = '';
+                        if($warning) {
+                            if(strpos($definition, 'integrate') === FALSE)
+                                $comment .= 'This variable conversion most probably needs manual attention. Please refer to the SOWISO user manual.' . PHP_EOL;
+                            else
+                                $comment .= 'Maxima lacks capability to output LaTeX of integrals without evaluating them. This has to be done manually.' . PHP_EOL;
+                        }
+                        $comment .= 'Original variable:' . PHP_EOL . $name . '=' . $def['ta'];
                     }
-                }/*elseif(strpos($def['sowiso'], 'mathml(') !== FALSE) {
-                    $definition = 1;
-                    $comment = 'Variable could not be converted:' . PHP_EOL . $name . '=' . $def['ta'];
-                }*/ else {
+                } else {
                     $definition = $def['sowiso'];
                     $comment = 'Original variable:' . PHP_EOL . $name . '=' . $def['ta'];
                 }
+
+                # Replace ${x} with $x
+                $definition = preg_replace('/\$\{(\w+)\}/', '\$$1', $definition);
+
+                # Variable replacement
                 $definition = preg_replace($this->newVars[0], $this->newVars[1], $definition);
 
                 # Remove semi-colon
@@ -594,6 +609,18 @@ class Preparer {
                     'evaluation_category' => 1
                 );
             }
+        } else {
+            $exercise_solution[] = array(
+                'id' => 0,
+                'exercise_id' => $this->exercise_id,
+                'number' => 0,
+                'solution' => '',
+                'low' => 0,
+                'high' => 0,
+                'precision' => 8,
+                'type' => 1,
+                'evaluation_category' => 1
+            );
         }
         return $exercise_solution;
     }
@@ -629,9 +656,8 @@ class Preparer {
             for($i=1; $i<=sizeof($this->data['choice']); $i++)
                 $this->texts['option_' . $i] = $this->data['choice'][$i];
 
-        //todo
         if(isset($this->data['comment']) && is_array($this->data['comment']))
-            $this->data['comment'] = ''; // happens a few times. todo: needs feedback rule
+            $this->data['comment'] = '';
 
         # Solution
         if(isset($this->data['comment']) && $this->data['comment'] != '')
@@ -666,19 +692,25 @@ class Preparer {
 
         # Replace old variable names with new ones
         if(!empty($this->newVars))
-            $this->texts = preg_replace($this->newVars[0], $this->newVars[1], $this->texts);
+            $this->texts = preg_replace($this->newVars[0], $this->newVars[3], $this->texts);
+
+        # Make sure there is an empty solution field
+        if(!isset($this->texts['solution']))
+            $this->texts['solution'] = '';
 
         $i=0;
-        foreach($this->texts as $key=>$text) {
-            $exercise_text[$i] = array(
-                'id' => $i,
-                'key' => $key,
-                'language_id' => 1,
-                'exercise_id' => $this->exercise_id,
-                'text' => $this->_mml2tex($text),
-                'author_text' => ''
-            );
-            $i++;
+        foreach($this->languages as $lang_id) {
+            foreach($this->texts as $key=>$text) {
+                $exercise_text[$i] = array(
+                    'id' => $i,
+                    'key' => $key,
+                    'language_id' => $lang_id,
+                    'exercise_id' => $this->exercise_id,
+                    'text' => $this->_mml2tex($text),
+                    'author_text' => ''
+                );
+                $i++;
+            }
         }
 
         return $exercise_text;
@@ -755,6 +787,7 @@ class Preparer {
                     break;
                 case 'Multiple Choice':
                 case 'Non Permuting Multiple Choice':
+                    ksort($part['choice']);
                     $replace = '#dropdown(' . implode(',', $part['choice']) . ')#';
                     break;
                 case 'Maple':
@@ -770,6 +803,7 @@ class Preparer {
                     $replace = '#input#';
                     $this->data['inline_feedback_number'] = $i-1;
                     $this->restrictedFormula = TRUE;
+                    break;
                 default:
                     $replace = '#input#';
             }
@@ -939,6 +973,7 @@ class Preparer {
                 $tree = $this->parser->parse($var);
                 $tree = $this->traverser->traverse($tree);
                 $var = $this->prettyPrinter->prettyPrint($tree);
+                $var = preg_replace('/sw_maxima_native\(\'(.*)\'\);/', 'sw_maxima_native("$1");', $var);
             } catch(\PhpParser\Error $e) {
                 //echo '<p>Parse Error: ', $e->getMessage() , ' in string: ' . $origVar . '</p>';
                 $var = '';
@@ -992,11 +1027,11 @@ class Preparer {
                 $case1 = ctype_alpha($def[$i - 1]) && ($def[$i] == '$' || ctype_alpha($def[$i]) || ctype_digit($def[$i]));
                 if($case1) {
                     # Extract name of entire variable, to make sure it does not exist (if it exists, no multipliers are inserted between letters and numbers)
-                    $endMarker = array('-', '+', '/', '*', '^', ' ', ';', '(', ')', '$', ',');
+                    $endMarker = array('-', '+', '/', '*', '^', ' ', ';', '(', ')', '$', ',', '\'', '"');
                     for($start=$i-1; in_array($def[$start],$endMarker)===FALSE && $start>0; $start--);
                     for($end=$i-1; in_array($def[$end],$endMarker)===FALSE; $end++);
                     if(strpos($def, '$', $offset) !== FALSE) {
-                        $isVar = (in_array(substr($def, $start, $end-$start), $varNames)) ? TRUE : FALSE;
+                        $isVar = (in_array(substr($def, $start, $end-$start), $varNames));
                         # In case it is no variable, insert * in-between every letter and number
                         if(!$isVar) {
                             $newDef = substr($def, 0, ++$start+1);
@@ -1071,36 +1106,102 @@ class Preparer {
      * Takes a string containing a maple(" ... ") function and tries converting it.
      * Returns original string if it fails and converted string if it succeeds.
      */
-    private function _mapleVarConvert($definition) {
+    public function _mapleVarConvert($definition) {
+        $definition = str_replace(' end if', '', $definition);
+        if(strpos($definition, 'maple') === FALSE) {
+            $definition = "maple(\"$definition\")";
+        }
+        $warningMessage = FALSE;
+        # Functions with 1-to-1 conversion
+        $conv1to1 = array(
+            array( // Maple:
+                'Diff', 'abs', 'arccos', 'arcsin', 'arctan', 'cos', 'sin', 'tan', 'binomial', 'coeff', 'content', 'denom',
+                'eval', 'exp', 'expand', 'factor', 'floor', 'ifactors', 'ilcm', 'lhs', 'ln', 'log', 'max', 'min', 'numer',
+                'rhs', 'sign', 'signum', 'solve', 'sqrt', 'surd', 'trun', 'float', 'simplify', 'value', 'diff', 'Diff', 'f', 'g'
+            ),
+            array( // Maxima:
+                'diff', 'abs', 'acos', 'asin', 'atan', 'cos', 'sin', 'tan', 'binomial', 'coeff', 'content', 'denom',
+                'ev', 'exp', 'expand', 'factor', 'floor', 'ifactors', 'lcm', 'lhs', 'ln', 'log', 'max', 'min', 'num',
+                'rhs', 'sign', 'signum', 'solve', 'sqrt', 'nthroot', 'truncate', 'float', 'trigrat', ' ', 'diff', 'diff', 'f', 'g'
+            )
+        );
+
         $definition = str_replace('`', '', $definition);
         $definition = preg_replace('/Pi(\W)/', 'float(%pi)$1', $definition);
         if(preg_match_all('/(maple\(\"(.*)\"\))/U', $definition, $mapleFunctions)) {
             for($i=0; $i<sizeof($mapleFunctions[1]); $i++) {
-                # ExportPresentation (currently converts ~85% of all ExportPresentations)
                 if(strpos($mapleFunctions[1][$i], 'ExportPresentation') !== FALSE) {
-                    if(preg_match_all('/ExportPresentation[\]]?\((.*)\)\)"\)/U', $mapleFunctions[1][$i], $ep)) {
+                    if(preg_match_all('/ExportPresentation[\]]?\((.*)\)[\)]?"\)/U', $mapleFunctions[1][$i], $ep)) {
                         foreach($ep[1] as $e) {
                             if(substr_count($e, '(') != substr_count($e, ')'))
                                 $e .= ')';
                             if(!preg_match('/\w+\(/', $e) && strpos($e, '\'') === FALSE && strpos($e, ']') === FALSE && strpos($e, '..') === FALSE)
                                 $definition = str_replace($mapleFunctions[1][$i], "sw_maxima(\"$e\")", $definition);
                             else {
-                                // trickier conversion
+                                # Removing unnecessary MathML subtstringing
+                                if(strpos($mapleFunctions[2][$i], 'SubString') !== FALSE) {
+                                    if(strpos($e, 'StringTools:-SubString(convert(') === FALSE) {
+                                        $e = str_replace('),50..-8)', '', $e);
+                                    } else {
+                                        $e = str_replace(array('StringTools:-SubString(convert(', ',string),2..-2)'), '', $e);
+                                    }
+                                    $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima("' . $e . '")', $definition);
+                                } else {
+                                    $converted = $this->_mapleVarConvert($e);
+                                    if(!$warningMessage)
+                                        $warningMessage = $converted['warning'];
+                                    if(preg_match('/sw_maxima(?:_native)?\("(.*)"\)/', $converted['definition'], $newDef)) {
+                                        $converted['definition'] = $newDef[1];
+                                    }
+                                    $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima("' . $converted['definition'] . '")', $definition);
+                                }
                             }
                         }
                     }
                 } else {
-                    # Normal Maple Function (currently converts ~35% of all Maple Vars)
-                    if(strpos($mapleFunctions[2][$i], '[') === FALSE && strpos($mapleFunctions[2][$i], '{') === FALSE && strpos($mapleFunctions[2][$i], '.') === FALSE && !preg_match('/\w+\(/', $mapleFunctions[2][$i])) {
-                        # Means simple 1-to-1 conversion possible
+                    # No conversion necessary
+                    if(strpos($mapleFunctions[2][$i], 'union') === FALSE &&strpos($mapleFunctions[2][$i], 'then') === FALSE && strpos($mapleFunctions[2][$i], '{') === FALSE && strpos($mapleFunctions[2][$i], '.') === FALSE && !preg_match('/\w+\(/', $mapleFunctions[2][$i])) {
                         $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima_native("' . $mapleFunctions[2][$i] . '")', $definition);
                     } else {
-                        // trickier conversion (probably needs a new PhpParser Traverser)
+                        # Trickier conversion
+                        if(preg_match_all('/(?<=\W|\A)([a-zA-Z]+)\(/', $mapleFunctions[2][$i], $matches)) {
+                            # Match all functions
+                            $conv = true;
+                            foreach($matches[1] as $match) {
+                                if(!in_array($match, $conv1to1[0])) {
+                                    $conv = false;
+                                    break;
+                                }
+                            }
+                            if($conv) {
+                                $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima_native("' . str_replace($conv1to1[0], $conv1to1[1], $mapleFunctions[2][$i]) . '")', $definition);
+                            } else {
+                                $convertedVar = $mapleFunctions[2][$i];
+                                for($j=0; $j<sizeof($matches[0]); $j++) {
+                                    $start = strpos($mapleFunctions[2][$i], $matches[0][$j]);
+                                    for($end=$start, $openBr=0, $closedBr=0; $end<strlen($mapleFunctions[2][$i]); $end++) {
+                                        if($openBr != 0 && $openBr == $closedBr)
+                                            break;
+                                        if($mapleFunctions[2][$i][$end] == '(')
+                                            $openBr++;
+                                        elseif($mapleFunctions[2][$i][$end] == ')')
+                                            $closedBr++;
+                                    }
+                                    $extractedFunction = substr($mapleFunctions[2][$i], $start, $end-$start);
+                                    $converted = $this->mapleParser->convert($extractedFunction, $conv1to1);
+                                    $warningMessage = $converted['warning'];
+                                    $convertedFunction = $converted['definition'];
+                                    $convertedVar = str_replace($extractedFunction, $convertedFunction, $convertedVar);
+                                }
+                                $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima_native("' . $convertedVar . '")', $definition);
+                            }
+                        } else {
+                            $definition = str_replace($mapleFunctions[1][$i], 'sw_maxima_native("' . $mapleFunctions[2][$i] . '")', $definition);
+                        }
                     }
                 }
             }
         }
-
-        return $definition;
+        return array('warning'=>$warningMessage, 'definition'=>$definition);
     }
 }
