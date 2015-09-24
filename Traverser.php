@@ -9,6 +9,8 @@ require 'PhpParser/lib/bootstrap.php';
  * @package PhpParser
  * Traverser that traverses over the parsed tree (see PhpParser Docs)
  * Used for conversion from MapleTA functions to SOWISO functions
+ *
+ * For more information: https://github.com/nikic/PHP-Parser/blob/master/doc/2_Usage_of_basic_components.markdown#node-traversation
  */
 class Traverser extends NodeVisitorAbstract {
     private $prettyPrinter;

@@ -3,12 +3,10 @@ class MapleParser {
     /**
      * @param $definition
      * @return string
-     * not working: ln($a+$b*ln($c+$d*x))
-     * not working: [], {} (treat as single arg)
-     * not working: int($a*x^($b)+$b*x^($a),x)
      */
     private $conv1to1;
     private $maple2maxima = array(
+        # Regex patterns for function name replacement
         array('/add([ ]?\()/','/arccos([ ]?\()/','/arcsin([ ]?\()/','/arctan([ ]?\()/','/ceil([ ]?\()/','/degree([ ]?\()/',
                 '/ifactor([ ]?\()/','/igcd([ ]?\()/','/ilcm([ ]?\()/','/indets([ ]?\()/','/Insert([ ]?\()/','/int([ ]?\()/','/Limit([ ]?\()/',
                 '/Matrix([ ]?\()/','/modp([ ]?\()/','/nops([ ]?\()/','/Quo([ ]?\()/','/rand([ ]?\()/','/select([ ]?\()/','/seq([ ]?\()/',
@@ -16,24 +14,37 @@ class MapleParser {
         array('sum$1','acos$1','asin$1','atan$1','ceiling$1','hipow$1',
                 'ifactors$1','gcd$1','lcm$1','listofvars$1','sinsert$1','integrate$1','limit$1',
                 'matrix$1','mod$1','length$1','quotient$1','random$1','sublist$1','makelist$1',
-                'trigsimp$1','subst$1','truncate$1','vector$1')
+                'radcan$1','subst$1','truncate$1','vector$1')
     );
 
     private $warningMessage = FALSE;
 
     public function convert($definition, $conv1to1) {
         $this->conv1to1 = $conv1to1;
+
+        # No function? Skip the rest
         if(strpos($definition, '(') === FALSE)
-            return array('warning'=>FALSE, 'definition' => $definition);
+            return array('warning' => FALSE, 'definition' => $definition);
+
+        # Hacks
         $definition = str_replace(array(',-', ',+'), array(', -', ', +'), $definition);
         $definition = preg_replace('/(^[a-zA-Z]+\()/', '$1 ', $definition);
+
+        # Build tree
         $tree = $this->_buildTree($definition);
+
+        # Fix tree structure
         if(isset($tree[0]))
             $tree = $tree[0];
         $this->_traverseTree($tree);
         $definition = $this->_treeToString($tree);
+
+        # Get rid of an unnecessary space
         $definition = preg_replace('/(^[a-zA-Z]+\() /', '$1', $definition);
+
+        # Get rid of trailing comma
         $definition = strrpos($definition, ',') == strlen($definition) - 1 ? substr($definition, 0, -1) : $definition;
+
         if($this->warningMessage) {
             $definition = preg_replace($this->maple2maxima[0], $this->maple2maxima[1], $definition);
             return array('warning'=>TRUE, 'definition'=>$definition);
@@ -73,7 +84,6 @@ class MapleParser {
                             unset($tree[$name]);
                         }
                     } else {
-
                         switch($name) {
                             case 'Int':case 'int':
                                 $tree['integrate'] = $tree[$name];
@@ -177,7 +187,7 @@ class MapleParser {
         }
     }
 
-    private function _treeToString($node, &$str = '', $parentNode = array(), $parentParentNode = array(), $functionName = FALSE) { //tdo erf(1) + 2, not erf(1)+ 2
+    private function _treeToString($node, &$str = '', $parentNode = array(), $parentParentNode = array(), $functionName = FALSE) {
         if($functionName === FALSE)
             $functionName = key($node);
         if(is_array($node)) {

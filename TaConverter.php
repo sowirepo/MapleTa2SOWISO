@@ -27,9 +27,13 @@ class TaConverter
      */
     public function convert(Array $file, Array $languages) {
         $data = $this->_collectData($file);
+
+        # Split qu bank if too many exercises
         if(sizeof($data) > 105) {
             return array('error' => 'Exceeded maximum number of exercises to convert at once (100).', 'splits' => $this->splitQu($file));
         }
+
+        # Convert to XML
         $data = $this->xmlParser->parse($data, $languages);
         return $data;
     }
@@ -57,7 +61,7 @@ class TaConverter
             $line = preg_replace('/^qu\.\d+\./', 'qu.'. $i .'.', $line);
         } unset($line);
 
-        # Collect data
+        # Collect data and store in array
         $data = array();
         foreach ($file as $line) {
             if ($line = trim($line)) {

@@ -11,7 +11,6 @@ require dirname(__FILE__).'/../ProgressBar.php';
 class XmlParser {
     private $preparer;
     private $progressBar;
-    private $ci;
 
     function __construct() {
         $this->preparer = new XmlParser\Preparer();
